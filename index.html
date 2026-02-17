@@ -55,209 +55,134 @@
   </div>
 
 <script>
-/* ===== configuration ===== */
-const PREFIX = 'planner:';        // préfixe localStorage
+const PREFIX = 'planner:';
 const STATUSES = ["À faire","En cours","Terminé"];
-const COPY_LOOKBACK_DAYS = 30;    // combien de jours chercher pour copier les non-terminées
+const COPY_LOOKBACK_DAYS = 30;
 
-/* ===== utilitaires ===== */
 function iso(d){ return d.toISOString().slice(0,10); }
 function todayIso(){ return iso(new Date()); }
 function storageKey(dateIso){ return PREFIX + dateIso; }
 function uid(){ return Math.random().toString(36).slice(2,9); }
 
-/* ===== gestion stockage ===== */
 function loadTasks(dateIso){
   const raw = localStorage.getItem(storageKey(dateIso));
-  if (!raw) return [];
-  try { return JSON.parse(raw); } catch(e){ return []; }
+  if(!raw) return [];
+  try{ return JSON.parse(raw); }catch(e){ return []; }
 }
-function saveTasks(dateIso, tasks){
-  localStorage.setItem(storageKey(dateIso), JSON.stringify(tasks));
-}
+function saveTasks(dateIso,tasks){ localStorage.setItem(storageKey(dateIso),JSON.stringify(tasks)); }
 function listStoredDates(){
-  const dates = [];
+  const dates=[];
   for(let i=0;i<localStorage.length;i++){
-    const k = localStorage.key(i);
-    if (k && k.startsWith(PREFIX)) dates.push(k.slice(PREFIX.length));
+    const k=localStorage.key(i);
+    if(k && k.startsWith(PREFIX)) dates.push(k.slice(PREFIX.length));
   }
-  // trier decroissant
-  return dates.sort((a,b)=> b.localeCompare(a));
+  return dates.sort((a,b)=>b.localeCompare(a));
 }
 
-/* ===== logique de report quotidien ===== */
 function copyUnfinishedFromLast(dateIso){
-  // si déjà existant => rien
-  if (localStorage.getItem(storageKey(dateIso))) return 0;
+  if(localStorage.getItem(storageKey(dateIso))) return 0;
   const target = new Date(dateIso);
-  for(let d=1; d<=COPY_LOOKBACK_DAYS; d++){
-    const prev = new Date(target);
-    prev.setDate(prev.getDate()-d);
+  for(let d=1;d<=COPY_LOOKBACK_DAYS;d++){
+    const prev = new Date(target); prev.setDate(prev.getDate()-d);
     const prevIso = iso(prev);
     const prevTasks = loadTasks(prevIso);
-    if (prevTasks && prevTasks.length){
-      const toCopy = prevTasks.filter(t => t.status !== "Terminé").map(t => ({
-        id: uid(),
-        text: t.text,
-        status: t.status,
-        created_at: t.created_at || new Date().toISOString(),
-        updated_at: new Date().toISOString()
+    if(prevTasks.length){
+      const toCopy = prevTasks.filter(t=>t.status!=="Terminé").map(t=>({
+        id: uid(), text:t.text, status:t.status,
+        created_at:t.created_at||new Date().toISOString(),
+        updated_at:new Date().toISOString()
       }));
-      if (toCopy.length){
-        saveTasks(dateIso, toCopy);
-        return toCopy.length;
-      } else return 0;
+      if(toCopy.length){ saveTasks(dateIso,toCopy); return toCopy.length; } else return 0;
     }
   }
   return 0;
 }
 
-/* ===== affichage ===== */
 const dateInput = document.getElementById('date');
 const newTaskInput = document.getElementById('newtask');
 const tasksContainer = document.getElementById('tasksContainer');
 const historyDiv = document.getElementById('history');
 
+function persistAndRender(dateIso, tasks){ saveTasks(dateIso,tasks); render(dateIso); }
+
+function addTask(dateIso, text){
+  if(!text || !text.trim()) return;
+  const tasks=loadTasks(dateIso);
+  const t={id:uid(), text:text.trim(), status:STATUSES[0], created_at:new Date().toISOString(), updated_at:new Date().toISOString()};
+  tasks.push(t); persistAndRender(dateIso,tasks);
+}
+function toggleStatus(dateIso,id){
+  const tasks=loadTasks(dateIso);
+  const t=tasks.find(x=>x.id===id); if(!t) return;
+  const i=STATUSES.indexOf(t.status); t.status=STATUSES[(i+1)%STATUSES.length];
+  t.updated_at=new Date().toISOString(); persistAndRender(dateIso,tasks);
+}
+function deleteTask(dateIso,id){
+  let tasks=loadTasks(dateIso); tasks=tasks.filter(x=>x.id!==id); persistAndRender(dateIso,tasks);
+}
+function clearDone(dateIso){ let tasks=loadTasks(dateIso); tasks=tasks.filter(x=>x.status!=="Terminé"); persistAndRender(dateIso,tasks); }
+
+function exportAllToCSV(){
+  try{
+    const dates=listStoredDates();
+    let csv="date,id,text,status,created_at,updated_at\n";
+    dates.forEach(d=>{
+      const tasks=loadTasks(d);
+      tasks.forEach(t=>{ csv+=`${d},${t.id},"${t.text.replace(/"/g,'""')}",${t.status},${t.created_at},${t.updated_at}\n`; });
+    });
+    const blob=new Blob([csv],{type:'text/csv'}); const url=URL.createObjectURL(blob);
+    const a=document.createElement('a'); a.href=url; a.download='planner.csv'; a.click(); URL.revokeObjectURL(url);
+  }catch(e){ alert("Impossible d'exporter CSV : "+e); }
+}
+
 function render(dateIso){
-  // affiche tasks du jour
-  const tasks = loadTasks(dateIso);
-  tasksContainer.innerHTML = '';
-  if (!tasks.length){
-    tasksContainer.innerHTML = '<div class="muted">Aucune tâche pour cette date.</div>';
-  } else {
-    tasks.forEach(t => {
-      const el = document.createElement('div');
-      el.className = 'task';
-      const left = document.createElement('div'); left.className='left';
-      const text = document.createElement('div'); text.textContent = t.text;
-      text.style.maxWidth = '620px';
-      const status = document.createElement('div'); 
-      status.className = 'status ' + (t.status==='À faire'?'todo':t.status==='En cours'?'doing':'done');
-      status.textContent = t.status;
-      left.appendChild(text);
-      el.appendChild(left);
-      const right = document.createElement('div');
-      // actions: toggle status
-      const btnToggle = document.createElement('button'); btnToggle.className='btn-ic';
-      btnToggle.title = 'Changer le statut';
-      btnToggle.innerHTML = '🔁';
-      btnToggle.onclick = () => { toggleStatus(dateIso, t.id); };
-      const btnDel = document.createElement('button'); btnDel.className='btn-ic';
-      btnDel.title = 'Supprimer';
-      btnDel.innerHTML = '🗑️';
-      btnDel.onclick = () => { deleteTask(dateIso, t.id); };
-      right.appendChild(status);
-      right.appendChild(btnToggle);
-      right.appendChild(btnDel);
-      el.appendChild(right);
-      tasksContainer.appendChild(el);
-      // click sur texte pour éditer inline
-      text.onclick = () => {
-        const input = document.createElement('input');
-        input.type = 'text'; input.value = t.text; input.style.width='420px';
-        text.replaceWith(input);
-        input.focus();
-        input.onblur = () => { t.text = input.value || t.text; t.updated_at=new Date().toISOString(); persistAndRender(dateIso, tasks); };
-        input.onkeydown = (e)=> { if(e.key==='Enter') input.blur(); };
+  const tasks=loadTasks(dateIso);
+  tasksContainer.innerHTML='';
+  if(!tasks.length){ tasksContainer.innerHTML='<div class="muted">Aucune tâche pour cette date.</div>'; }
+  else{
+    tasks.forEach(t=>{
+      const el=document.createElement('div'); el.className='task';
+      const left=document.createElement('div'); left.className='left';
+      const text=document.createElement('div'); text.textContent=t.text; text.style.maxWidth='620px';
+      const status=document.createElement('div'); status.className='status ' + (t.status==='À faire'?'todo':t.status==='En cours'?'doing':'done'); status.textContent=t.status;
+      left.appendChild(text); el.appendChild(left);
+      const right=document.createElement('div');
+      const btnToggle=document.createElement('button'); btnToggle.className='btn-ic'; btnToggle.title='Changer le statut'; btnToggle.innerHTML='🔁';
+      btnToggle.onclick=()=>{toggleStatus(dateIso,t.id);};
+      const btnDel=document.createElement('button'); btnDel.className='btn-ic'; btnDel.title='Supprimer'; btnDel.innerHTML='🗑️';
+      btnDel.onclick=()=>{deleteTask(dateIso,t.id);};
+      right.appendChild(status); right.appendChild(btnToggle); right.appendChild(btnDel);
+      el.appendChild(right); tasksContainer.appendChild(el);
+
+      text.onclick=()=>{
+        const input=document.createElement('input'); input.type='text'; input.value=t.text; input.style.width='420px';
+        text.replaceWith(input); input.focus();
+        input.onblur=()=>{ t.text=input.value||t.text; t.updated_at=new Date().toISOString(); persistAndRender(dateIso,tasks); };
+        input.onkeydown=(e)=>{ if(e.key==='Enter') input.blur(); };
       };
     });
   }
-  renderHistory();
+
+  // historique
+  const dates=listStoredDates();
+  historyDiv.innerHTML='';
+  if(!dates.length){ historyDiv.innerHTML='<div class="muted">Aucun historique.</div>'; return; }
+  dates.forEach(d=>{ const btn=document.createElement('button'); btn.textContent=d; btn.style.marginRight='6px'; btn.onclick=()=>{ dateInput.value=d; onDateChange(); }; historyDiv.appendChild(btn); });
 }
 
-function renderHistory(){
-  const dates = listStoredDates();
-  historyDiv.innerHTML = '';
-  if (!dates.length) { historyDiv.innerHTML = '<div class="muted">Aucun historique.</div>'; return; }
-  dates.forEach(d => {
-    const btn = document.createElement('button');
-    btn.textContent = d;
-    btn.style.marginRight='6px';
-    btn.onclick = ()=> { dateInput.value = d; onDateChange(); };
-    historyDiv.appendChild(btn);
-  });
-}
-
-/* ===== opérations sur tâches ===== */
-function persistAndRender(dateIso, tasks){
-  saveTasks(dateIso, tasks);
-  render(dateIso);
-}
-
-function addTask(dateIso, text){
-  if (!text || !text.trim()) return;
-  const tasks = loadTasks(dateIso);
-  const t = { id: uid(), text: text.trim(), status: STATUSES[0], created_at: new Date().toISOString(), updated_at: new Date().toISOString() };
-  tasks.push(t);
-  persistAndRender(dateIso, tasks);
-}
-
-function toggleStatus(dateIso, id){
-  const tasks = loadTasks(dateIso);
-  const t = tasks.find(x=>x.id===id);
-  if (!t) return;
-  const i = STATUSES.indexOf(t.status);
-  t.status = STATUSES[(i+1)%STATUSES.length];
-  t.updated_at = new Date().toISOString();
-  persistAndRender(dateIso, tasks);
-}
-
-function deleteTask(dateIso, id){
-  let tasks = loadTasks(dateIso);
-  tasks = tasks.filter(x=>x.id!==id);
-  persistAndRender(dateIso, tasks);
-}
-
-function clearDone(dateIso){
-  let tasks = loadTasks(dateIso);
-  tasks = tasks.filter(x=>x.status !== "Terminé");
-  persistAndRender(dateIso, tasks);
-}
-
-/* ===== export CSV simple ===== */
-function exportAllToCSV(){
-  const dates = listStoredDates();
-  let rows = [['date','id','text','status','created_at','updated_at']];
-  dates.forEach(d => {
-    const tasks = loadTasks(d);
-    tasks.forEach(t => rows.push([d, t.id, '"' + (t.text||'').replace(/"/g,'""') + '"', t.status, t.created_at||'', t.updated_at||'']));
-  });
-  const csv = rows.map(r => r.join(',')).join('\n');
-  const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a'); a.href = url; a.download = 'planner_export.csv'; a.click();
-  URL.revokeObjectURL(url);
-}
-
-/* ===== interactions UI ===== */
 function onDateChange(){
-  const d = dateInput.value;
-  if(!d) return;
-  const copied = copyUnfinishedFromLast(d);
-  if (copied) alert(copied + ' tâche(s) non terminée(s) ont été reportées pour cette date.');
+  const d=dateInput.value; if(!d) return;
+  const copied=copyUnfinishedFromLast(d);
+  if(copied) alert(copied+' tâche(s) non terminée(s) ont été reportées pour cette date.');
   render(d);
 }
 
-document.getElementById('add').onclick = () => {
-  const d = dateInput.value || todayIso();
-  addTask(d, newTaskInput.value);
-  newTaskInput.value = '';
-};
-document.getElementById('clearDone').onclick = () => { clearDone(dateInput.value || todayIso()); };
-document.getElementById('exportCsv').onclick = exportAllToCSV;
+document.getElementById('add').onclick=()=>{ addTask(dateInput.value||todayIso(),newTaskInput.value); newTaskInput.value=''; };
+document.getElementById('clearDone').onclick=()=>{ clearDone(dateInput.value||todayIso()); };
+document.getElementById('exportCsv').onclick=exportAllToCSV;
 
-/* ===== initialisation ===== */
 (function init(){
-  const t = todayIso();
-  dateInput.value = t;
-  // si la clé du jour n'existe pas, on tente de copier les non-terminées
-  const copied = copyUnfinishedFromLast(t);
-  if (copied) {
-    // affiche message bref
-    console.info(copied + ' tâches reportées pour aujourd\\'hui');
-    // si tu veux informer l'utilisateur : alert(...)
-  }
-  render(t);
+  const t=todayIso(); dateInput.value=t; copyUnfinishedFromLast(t); render(t);
 })();
 </script>
 </body>
